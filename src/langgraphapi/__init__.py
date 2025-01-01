@@ -1,10 +1,8 @@
-from .models import HeaderModel, BodyModel, QueryModel, CustomAPIInterface
-from .wrapper import APIInterfaceWrapper
+from .models import CustomAPIInterface, APIField
+from .wrapper import APICallerTool
 
 __all__ = [
-    "HeaderModel",
-    "BodyModel",
-    "QueryModel",
     "CustomAPIInterface",
-    "APIInterfaceWrapper"
+    "APIField",
+    "APICallerTool"
 ]

@@ -1,85 +1,99 @@
-import pytest
-from langchain_core.messages import AIMessage, HumanMessage
-from langchain_core.tools import Tool
-from langgraph.prebuilt import ToolNode
+import unittest
+from unittest.mock import patch, Mock
+from pydantic import HttpUrl
+from src.langgraphapi.models import CustomAPIInterface, APIField
+from src.langgraphapi.wrapper import APICallerTool, APICallerInput
 
-from src.langgraphapi.wrapper import APIInterfaceWrapper
+class TestAPICallerTool(unittest.TestCase):
 
-# Mock LLM for testing
-class MockLLM:
-    async def ainvoke(self, prompt):
-        return '{"request_type": "GET", "uri": "https://api.example.com/data", "headers": {"Authorization": "Bearer token"}, "body": {}, "query": {"param": "value"}}'
+    def setUp(self):
+        self.api_interface = CustomAPIInterface(
+            method="GET",
+            url=HttpUrl("https://api.example.com/data"),
+            headers={
+                "Authorization": APIField(description="Auth token"),
+                "Content-Type": APIField(value="application/json", description="Content type")
+            },
+            body={
+                "username": APIField(description="User's username"),
+                "password": APIField(description="User's password")
+            },
+            query={
+                "limit": APIField(description="Number of items to return"),
+                "offset": APIField(description="Starting index")
+            }
+        )
+        self.api_caller_tool = APICallerTool(api_interface=self.api_interface)
 
-# Mock tool for testing
-def mock_tool(request_type, uri, headers, body, query):
-    return f"Mock API call: {request_type} {uri}"
+    def test_initialization(self):
+        self.assertEqual(self.api_caller_tool.name, "api_caller")
+        self.assertIsInstance(self.api_caller_tool.args_schema, type(APICallerInput))
 
-# Create a test tool
-test_tool = Tool(
-    name="test_api",
-    func=mock_tool,
-    description="A test API tool"
-)
+    def test_get_api_details(self):
+        result = self.api_caller_tool.get_api_details()
+        self.assertEqual(result, self.api_interface)
+        self.assertTrue(self.api_caller_tool.state.api_details_retrieved)
 
-@pytest.fixture
-def api_wrapper():
-    return APIInterfaceWrapper()
+    @patch('requests.request')
+    def test_fill_and_request(self, mock_request):
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"data": "test"}
+        mock_response.headers = {'content-type': 'application/json'}
+        mock_request.return_value = mock_response
 
-def test_define_api(api_wrapper):
-    api_wrapper.define_api(
-        request_type="GET",
-        uri="https://api.example.com/data",
-        headers={"Authorization": {"description": "Bearer token", "example": "Bearer abc123"}},
-        body={},
-        query={"param": {"description": "Query parameter", "example": "value"}}
-    )
-    assert api_wrapper.api_interface is not None
-    assert api_wrapper.api_interface.request_type == "GET"
-    assert api_wrapper.api_interface.uri == "https://api.example.com/data"
+        result = self.api_caller_tool.fill_and_request(
+            headers={"Authorization": "Bearer token123"},
+            body={"username": "testuser", "password": "testpass"},
+            query={"limit": "10", "offset": "0"}
+        )
 
-@pytest.mark.asyncio
-async def test_create_api_node(api_wrapper):
-    api_wrapper.define_api(
-        request_type="GET",
-        uri="https://api.example.com/data",
-        headers={"Authorization": {"description": "Bearer token", "example": "Bearer abc123"}},
-        body={},
-        query={"param": {"description": "Query parameter", "example": "value"}}
-    )
-    
-    mock_llm = MockLLM()
-    api_node = api_wrapper.create_api_node(mock_llm)
-    
-    state = {
-        "messages": [
-            HumanMessage(content="Make an API call"),
-            AIMessage(content="Certainly! I'll make an API call for you.", tool_calls=[
-                {"name": "test_api", "id": "call1", "type": "function", "args": {}}
-            ])
-        ]
-    }
-    
-    result = await api_node(state)
-    assert isinstance(result, dict)
-    assert "messages" in result
-    assert len(result["messages"]) == 1
-    assert result["messages"][0].content.startswith("Mock API call: GET https://api.example.com/data")
+        self.assertEqual(result, {"status_code": 200, "response": {"data": "test"}})
+        self.assertEqual(self.api_interface.headers["Authorization"].value, "Bearer token123")
+        self.assertEqual(self.api_interface.body["username"].value, "testuser")
+        self.assertEqual(self.api_interface.query["limit"].value, "10")
 
-def test_create_api_graph(api_wrapper):
-    api_wrapper.define_api(
-        request_type="GET",
-        uri="https://api.example.com/data",
-        headers={"Authorization": {"description": "Bearer token", "example": "Bearer abc123"}},
-        body={},
-        query={"param": {"description": "Query parameter", "example": "value"}}
-    )
-    
-    mock_llm = MockLLM()
-    mock_agent = lambda x: x
-    mock_should_end = lambda x: "__end__"
-    
-    graph = api_wrapper.create_api_graph(mock_llm, mock_agent, mock_should_end)
-    assert graph is not None
+    def test_run_get_api_details(self):
+        result = self.api_caller_tool._run("get_api_details")
+        self.assertEqual(result, self.api_interface)
 
-if __name__ == "__main__":
-    pytest.main([__file__])
+    @patch('requests.request')
+    def test_run_fill_and_request(self, mock_request):
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"data": "test"}
+        mock_response.headers = {'content-type': 'application/json'}
+        mock_request.return_value = mock_response
+
+        result = self.api_caller_tool._run(
+            "fill_and_request",
+            headers={"Authorization": "Bearer token123"},
+            body={"username": "testuser", "password": "testpass"},
+            query={"limit": "10", "offset": "0"}
+        )
+
+        self.assertEqual(result, {"status_code": 200, "response": {"data": "test"}})
+
+    def test_run_invalid_action(self):
+        result = self.api_caller_tool._run("invalid_action")
+        self.assertEqual(result, {"error": "Invalid action. Use 'get_api_details' or 'fill_and_request'."})
+
+    @patch('requests.request')
+    async def test_arun(self, mock_request):
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"data": "test"}
+        mock_response.headers = {'content-type': 'application/json'}
+        mock_request.return_value = mock_response
+
+        result = await self.api_caller_tool._arun(
+            "fill_and_request",
+            headers={"Authorization": "Bearer token123"},
+            body={"username": "testuser", "password": "testpass"},
+            query={"limit": "10", "offset": "0"}
+        )
+
+        self.assertEqual(result, {"status_code": 200, "response": {"data": "test"}})
+
+if __name__ == '__main__':
+    unittest.main()

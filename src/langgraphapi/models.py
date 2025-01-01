@@ -1,20 +1,22 @@
-from pydantic import BaseModel, Field
-from typing import Annotated, Dict, Any
-from langgraph.graph import StateGraph, END
-from langchain_core.messages import HumanMessage, AIMessage
+from pydantic import BaseModel, Field, HttpUrl, model_validator
+from typing import Dict, Optional
 
-class HeaderModel(BaseModel):
-    content_type: Annotated[str, Field(description="The media type of the body of the request", example="application/json")]
+class APIField(BaseModel):
+    value: Optional[str] = None
+    description: Optional[str] = None
 
-class BodyModel(BaseModel):
-    pass
-
-class QueryModel(BaseModel):
-    pass
+    @model_validator(mode="after")
+    def at_least_one_required(cls, values):
+        if values.value is None and values.description is None:
+            raise ValueError("At least one of 'value' or 'description' must be provided.")
+        return values
 
 class CustomAPIInterface(BaseModel):
-    request_type: Annotated[str, Field(description="HTTP method for the request", example="GET")]
-    uri: Annotated[str, Field(description="The endpoint URL", example="https://www.google.com/?client=safari")]
-    headers: HeaderModel
-    body: BodyModel
-    query: QueryModel
+    method: str = Field(..., description="HTTP method for the API request (e.g., GET, POST, PUT, DELETE)")
+    url: HttpUrl = Field(..., description="Full URL of the API endpoint")
+    headers: Dict[str, APIField] = Field(default_factory=dict, description="HTTP headers for the request")
+    body: Optional[Dict[str, APIField]] = Field(None, description="Request body for POST, PUT, or PATCH requests")
+    query: Optional[Dict[str, APIField]] = Field(None, description="Query parameters for the request")
+
+    class Config:
+        validate_assignment = True
